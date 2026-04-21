@@ -1,9 +1,11 @@
 # Resolution Hub UI Polish
 
 ## Summary
+
 Refine the existing single-file app into a cleaner, more restrained workspace UI while keeping every feature, the localStorage data model, and the no-dependency Chrome-on-Windows-11 runtime intact. The redesign will be shadcn-inspired in feel, but implemented entirely inside `Resolution Hub.html` with the current React CDN, Tailwind CDN, and Babel setup.
 
 ## Key Changes
+
 - Rebuild the visual system around a tighter neutral palette, softer surfaces, and more consistent spacing so the app feels less heavy and more intentional.
 - Simplify the shell:
   - lighten the sidebar treatment
@@ -21,6 +23,7 @@ Refine the existing single-file app into a cleaner, more restrained workspace UI
 - Keep dark mode, print, import/export, and all existing workflows unchanged.
 
 ## Test Plan
+
 - Open the app in Google Chrome on Windows 11 and verify the app loads with no console errors.
 - Smoke test these flows:
   - dashboard search, status filtering, and view switching
@@ -33,6 +36,7 @@ Refine the existing single-file app into a cleaner, more restrained workspace UI
 - Confirm the updated spacing, contrast, and controls remain usable at common desktop widths and do not introduce overflow or clipping.
 
 ## Assumptions
+
 - The requested change is a conservative polish, not a full brand redesign.
 - No new packages, fonts, or assets will be added.
 - The app should stay as one HTML file and continue relying only on the current CDN-based React/Tailwind/Babel setup.

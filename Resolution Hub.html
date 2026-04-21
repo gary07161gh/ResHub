@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resolution Hub</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: { extend: {} }
+      }
+    </script>
+
+    <!-- React & ReactDOM (UMD Production Builds) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel (For in-browser JSX compilation) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        dialog::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .dark ::-webkit-scrollbar-thumb { background: #334155; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .dragging { opacity: 0.5; }
+        .drag-over { background-color: rgba(59, 130, 246, 0.1); border-color: #3b82f6; }
+        @media print { .no-print { display: none !important; } }
+    </style>
+</head>
+<body class="h-full overflow-hidden">
+    <div id="root" class="h-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+        // --- Custom Hooks ---
+        const useLocalStorage = (key, initialValue) => {
+            const [storedValue, setStoredValue] = useState(() => {
+                try {
+                    const item = window.localStorage.getItem(key);
+                    return item ? JSON.parse(item) : initialValue;
+                } catch (error) {
+                    return initialValue;
+                }
+            });
+
+            const setValue = value => {
+                try {
+                    const valueToStore = value instanceof Function ? value(storedValue) : value;
+                    setStoredValue(valueToStore);
+                    window.localStorage.setItem(key, JSON.stringify(valueToStore));
+                } catch (error) {}
+            };
+            return [storedValue, setValue];
+        };
+
+        // --- Configuration & Constants ---
+        const STATUSES = ['Open', 'Customer Responded', 'Child Resolved', 'Hold - In Progress', '8 Week Letter Due', 'Closed'];
+        const CATEGORIES = ['Uncategorized', 'Billing', 'Technical Issue', 'Customer Service', 'Metering'];
+        const DEFAULT_QUICK_ACTIONS = ["Emailed customer for meter reading", "Left voicemail - no answer", "Requested account review from billing", "Sent 8-week holding letter", "Child complaint resolved over phone"];
+        
+        const STATUS_COLORS = {
+            'Open': { bg: '#10b981', tailwind: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400' },
+            'Customer Responded': { bg: '#3b82f6', tailwind: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
+            'Child Resolved': { bg: '#a855f7', tailwind: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400' },
+            'Hold - In Progress': { bg: '#f59e0b', tailwind: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400' },
+            '8 Week Letter Due': { bg: '#ef4444', tailwind: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
+            'Closed': { bg: '#94a3b8', tailwind: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400' }
+        };
+
+        const COLOR_MAP = {
+            blue: {
+                border: 'border-blue-200 dark:border-blue-900/50',
+                accent: 'bg-blue-500',
+                headerText: 'text-blue-500',
+                btn: 'bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800',
+                textarea: 'bg-blue-50/30 dark:bg-blue-900/10 border-blue-100 dark:border-blue-900/30 focus:ring-blue-500'
+            },
+            amber: {
+                border: 'border-amber-200 dark:border-amber-900/50',
+                accent: 'bg-amber-500',
+                headerText: 'text-amber-500',
+                btn: 'bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800',
+                textarea: 'bg-amber-50/30 dark:bg-amber-900/10 border-amber-100 dark:border-amber-900/30 focus:ring-amber-500'
+            }
+        };
+
+        // --- Global Helper Functions ---
+        const calculateAge = (dateString) => {
+            if (!dateString) return 0;
+            const diff = Math.abs(new Date() - new Date(dateString));
+            return Math.floor(diff / (1000 * 60 * 60 * 24)) || 0;
+        };
+
+        const isOverdue = (dateString) => {
+            if (!dateString) return false;
+            const d = new Date(dateString);
+            return !isNaN(d.getTime()) && d < new Date();
+        };
+
+        const generateId = () => crypto.randomUUID ? crypto.randomUUID() : Date.now().toString();
+        const generateCaseNumber = () => `C-${Math.floor(100000 + Math.random() * 900000)}`;
+
+        const parseMarkdown = (text) => {
+            if (!text) return '';
+            return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/^- (.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
+                .replace(/\n/g, '<br/>');
+        };
+
+        const exportData = (dataToExport, filename) => {
+            const json = JSON.stringify(dataToExport, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        // --- Inline Icons ---
+        const LayoutDashboard = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>;
+        const FolderOpen = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/><path d="M2 10h20"/></svg>;
+        const SaveIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>;
+        const Upload = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>;
+        const Plus = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>;
+        const SearchIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></svg>;
+        const Clock = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+        const AlertTriangle = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>;
+        const Moon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>;
+        const Sun = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>;
+        const ChevronLeft = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>;
+        const ChevronRight = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>;
+        const HistoryIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>;
+        const FileSpreadsheet = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/></svg>;
+        const FileText = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>;
+        const CheckCircle = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
+        const ArrowLeft = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" x2="5" y1="12" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>;
+        const Trash2 = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>;
+        const UserIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+        const TagIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>;
+        const ActivityIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>;
+        const TargetIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>;
+        const Printer = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>;
+        const SettingsIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>;
+        const LayoutGrid = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>;
+        const ListIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>;
+        const CheckSquare = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>;
+        const LinkIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>;
+        const ExternalLink = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>;
+        const BoldIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 4h8a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/><path d="M6 12h9a4 4 0 0 1 4 4 4 4 0 0 1-4 4H6z"/></svg>;
+        const ItalicIcon = ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/></svg>;
+
+        // --- Reusable UI Components ---
+        const InputField = React.memo(({ label, type = "text", value, onChange }) => (
+            <div>
+                <label className="block text-xs font-semibold text-gray-500 dark:text-slate-400 mb-1">{label}</label>
+                {type === "textarea" ? (
+                    <textarea rows="2" value={value} onChange={onChange} className="w-full px-3 py-2 bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white transition-shadow resize-none outline-none" />
+                ) : (
+                    <input type={type} value={value} onChange={onChange} className="w-full px-3 py-2 bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white transition-shadow outline-none" />
+                )}
+            </div>
+        ));
+
+        const DonutChart = React.memo(({ cases }) => {
+            const total = cases.length;
+            if (total === 0) return <div className="text-gray-400 text-sm text-center py-4">No cases</div>;
+            const data = STATUSES.map(s => ({
+                label: s, value: cases.filter(c => c.status === s).length, color: STATUS_COLORS[s].bg
+            })).filter(d => d.value > 0);
+            let offset = 0;
+            return (
+                <div className="flex items-center gap-6">
+                    <svg viewBox="0 0 40 40" className="w-24 h-24 transform -rotate-90">
+                        {data.map((slice, i) => {
+                            const dash = (slice.value / total) * 100; const currentOffset = offset; offset += dash;
+                            return <circle key={i} cx="20" cy="20" r="15.9155" fill="transparent" stroke={slice.color} strokeWidth="6" strokeDasharray={`${dash} ${100 - dash}`} strokeDashoffset={-currentOffset} />
+                        })}
+                        <circle cx="20" cy="20" r="12" fill="var(--tw-colors-white)" className="dark:fill-slate-800" />
+                        <text x="20" y="22" textAnchor="middle" fontSize="8" fontWeight="bold" fill="currentColor" className="dark:fill-white">{total}</text>
+                    </svg>
+                    <div className="flex-1 space-y-1">
+                        {data.map((slice, i) => (
+                            <div key={i} className="flex justify-between items-center text-xs">
+                                <div className="flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full" style={{backgroundColor: slice.color}}></span><span className="text-gray-600 dark:text-gray-300">{slice.label}</span></div>
+                                <span className="font-bold text-gray-900 dark:text-white">{slice.value} ({Math.round((slice.value/total)*100)}%)</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        });
+
+        const ActionBlock = React.memo(({ title, icon: Icon, color, value, field, placeholder, activeCaseId, updateCase, addHistoryLog, quickActions, focusedText, setFocusedText, handleTextBlur }) => (
+            <div className={`bg-white dark:bg-slate-800 p-6 rounded-xl border ${COLOR_MAP[color].border} shadow-sm relative overflow-hidden space-y-3`}>
+              <div className={`absolute top-0 left-0 w-1 h-full ${COLOR_MAP[color].accent}`}></div>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2 pl-2">
+                <h3 className={`text-sm font-bold uppercase tracking-wider flex items-center gap-2 ${COLOR_MAP[color].headerText}`}><Icon className="h-4 w-4" /> {title}</h3>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button onClick={() => { const ts = new Date().toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute:'2-digit' }).replace(',', ''); updateCase(activeCaseId, field, value ? `${value}\n[${ts}] ` : `[${ts}] `); }} className={`p-1.5 rounded-lg transition-colors flex-shrink-0 ${COLOR_MAP[color].btn}`} title="Insert Date/Time"><Clock className="h-4 w-4" /></button>
+                  {field === 'latestAction' && (
+                    <select onChange={(e) => { if(e.target.value) { const actionText = e.target.value; const ts = new Date().toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute:'2-digit' }).replace(',', ''); updateCase(activeCaseId, 'latestAction', value ? `${value}\n- [${ts}] ${actionText}` : `- [${ts}] ${actionText}`); addHistoryLog(activeCaseId, `Latest Action: ${actionText}`); e.target.value = ""; } }} className={`text-sm py-1.5 px-3 rounded-lg outline-none cursor-pointer transition-colors w-full sm:w-auto ${COLOR_MAP[color].btn}`}>
+                      <option value="" className="bg-white dark:bg-slate-800 dark:text-white text-gray-900">+ Quick Action</option>
+                      {quickActions.map(a => <option key={a} value={a} className="bg-white dark:bg-slate-800 dark:text-white text-gray-900">{a}</option>)}
+                    </select>
+                  )}
+                </div>
+              </div>
+              <div className="pl-2">
+                <textarea rows="3" value={value} onChange={(e) => updateCase(activeCaseId, field, e.target.value)} onFocus={(e) => setFocusedText(e.target.value)} onBlur={(e) => handleTextBlur(activeCaseId, title, e.target.value)} className={`w-full px-4 py-3 border rounded-lg text-sm transition-shadow resize-y outline-none dark:text-white ${COLOR_MAP[color].textarea}`} placeholder={placeholder} />
+              </div>
+            </div>
+        ));
+
+        // --- Main Application ---
+        function App() {
+          const [cases, setCases] = useLocalStorage('rh_cases', []);
+          const [personalTasks, setPersonalTasks] = useLocalStorage('rh_personal_tasks', []);
+          const [quickActions, setQuickActions] = useLocalStorage('rh_quick_actions', DEFAULT_QUICK_ACTIONS);
+          const [currentView, setCurrentView] = useLocalStorage('rh_view', 'dashboard');
+          const [dashboardMode, setDashboardMode] = useLocalStorage('rh_dashboard_mode', 'table');
+          const [activeCaseId, setActiveCaseId] = useLocalStorage('rh_active_case', null);
+          const [advisorName, setAdvisorName] = useLocalStorage('rh_advisor_name', 'Gary P.');
+          const [advisorInitials, setAdvisorInitials] = useLocalStorage('rh_advisor_initials', 'GP');
+          const [darkMode, setDarkMode] = useLocalStorage('rh_dark_mode', typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+          const [isTasksOpen, setIsTasksOpen] = useState(false);
+          const [searchQuery, setSearchQuery] = useState('');
+          const [statusFilter, setStatusFilter] = useState(null);
+          const [saveStatus, setSaveStatus] = useState('');
+          const [focusedText, setFocusedText] = useState("");
+          const [notesPreview, setNotesPreview] = useState(false);
+          const [newActionText, setNewActionText] = useState('');
+          
+          const [sortConfig, setSortConfig] = useState({ key: 'creationDate', direction: 'desc' });
+          const [currentPage, setCurrentPage] = useState(1);
+          const itemsPerPage = 10;
+
+          const searchInputRef = useRef(null);
+          const notesRef = useRef(null);
+          const casesRef = useRef(cases);
+          useEffect(() => { casesRef.current = cases; }, [cases]);
+
+          // --- Memoized Derived Data ---
+          const filteredCases = useMemo(() => 
+              cases.filter(c => 
+                  (c.caseNumber.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                  c.contactName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                  c.accountNumber?.toLowerCase().includes(searchQuery.toLowerCase())) &&
+                  (statusFilter ? c.status === statusFilter : true)
+              ), [cases, searchQuery, statusFilter]
+          );
+
+          const sortedCases = useMemo(() => [...filteredCases].sort((a, b) => {
+              let aVal = a[sortConfig.key], bVal = b[sortConfig.key];
+              if (sortConfig.key === 'age') { aVal = calculateAge(a.creationDate); bVal = calculateAge(b.creationDate); }
+              if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+              if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1; return 0;
+          }), [filteredCases, sortConfig]);
+
+          const paginatedCases = useMemo(() => sortedCases.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage), [sortedCases, currentPage, itemsPerPage]);
+          const totalPages = useMemo(() => Math.ceil(sortedCases.length / itemsPerPage), [sortedCases.length, itemsPerPage]);
+
+          const kpiData = useMemo(() => ({
+              'Open': cases.filter(c => c.status === 'Open').length,
+              'Customer Responded': cases.filter(c => c.status === 'Customer Responded').length,
+              'Child Resolved': cases.filter(c => c.status === 'Child Resolved').length,
+              'Hold - In Progress': cases.filter(c => c.status === 'Hold - In Progress').length,
+              '8 Week Letter Due': cases.filter(c => c.status === '8 Week Letter Due').length
+          }), [cases]);
+
+          const activeCase = useMemo(() => cases.find(c => c.id === activeCaseId) || null, [cases, activeCaseId]);
+
+          const requestSort = useCallback((key) => setSortConfig({ key, direction: sortConfig.key === key && sortConfig.direction === 'asc' ? 'desc' : 'asc' }), [sortConfig]);
+
+          // --- Handlers ---
+          const handleCreateCase = useCallback(() => {
+            const newCase = {
+              id: generateId(), caseNumber: generateCaseNumber(),
+              accountNumber: "", contactName: "New Customer", contactNumber: "", email: "", siteAddress: "",
+              status: "Open", category: "Uncategorized", holdUntilDate: "", creationDate: new Date().toISOString(),
+              notes: "", latestAction: "", nextAction: "", subTasks: [], links: [],
+              history: [{ id: Date.now(), timestamp: new Date().toISOString(), action: "Case Created", user: advisorName }]
+            };
+            setCases([newCase, ...casesRef.current]); setActiveCaseId(newCase.id); setCurrentView('case-detail');
+          }, [advisorName, setCases, setActiveCaseId, setCurrentView]);
+
+          const updateCase = useCallback((id, field, value) => {
+            setCases(prev => prev.map(c => {
+              if (c.id !== id) return c;
+              const updatedCase = { ...c, [field]: value };
+              if (field === 'status' && c.status !== value) {
+                updatedCase.history = [{ id: Date.now(), timestamp: new Date().toISOString(), action: `Status changed from ${c.status} to ${value}`, user: advisorName }, ...(c.history || [])];
+              }
+              return updatedCase;
+            }));
+          }, [advisorName, setCases]);
+
+          const addHistoryLog = useCallback((id, message) => {
+            setCases(prev => prev.map(c => {
+              if (c.id !== id) return c;
+              return { ...c, history: [{ id: Date.now(), timestamp: new Date().toISOString(), action: message, user: advisorName }, ...(c.history || [])] };
+            }));
+          }, [advisorName, setCases]);
+
+          const cleanArchivedCases = useCallback(() => {
+            const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            const initialCount = casesRef.current.length;
+            const activeCases = casesRef.current.filter(c => { 
+                if (c.status !== 'Closed') return true; 
+                const historyList = c.history || [];
+                const closedDate = new Date(historyList.find(h => h.action && h.action.includes('to Closed'))?.timestamp || c.creationDate || new Date().toISOString());
+                return closedDate > thirtyDaysAgo; 
+            });
+            setCases(activeCases);
+            alert(`Cleaned up ${initialCount - activeCases.length} old closed cases.`);
+          }, [setCases]);
+
+          const handleImport = useCallback((e) => {
+            const file = e.target.files[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              try { 
+                const importedData = JSON.parse(event.target.result); 
+                if (Array.isArray(importedData)) { setCases(importedData); alert("Database imported successfully."); } 
+                else alert("Invalid file format."); 
+              } catch (err) { alert("Error parsing JSON file."); }
+            }; reader.readAsText(file); e.target.value = null;
+          }, [setCases]);
+
+          const confirmDeleteCase = useCallback(() => {
+             const idToDelete = activeCaseId; if (!idToDelete) return;
+             setCases(prev => prev.filter(c => c.id !== idToDelete));
+             setCurrentView('dashboard'); setActiveCaseId(null);
+             document.getElementById('delete-modal')?.close();
+          }, [activeCaseId, setCases, setActiveCaseId, setCurrentView]);
+
+          const insertMarkdown = useCallback((prefix, suffix = '') => {
+            const activeCase = cases.find(c => c.id === activeCaseId) || null;
+            if(!activeCase || !notesRef.current) return;
+            const el = notesRef.current; const start = el.selectionStart; const end = el.selectionEnd; const text = activeCase.notes || '';
+            const newVal = text.substring(0, start) + prefix + text.substring(start, end) + suffix + text.substring(end);
+            updateCase(activeCase.id, 'notes', newVal);
+            setTimeout(() => { el.focus(); el.setSelectionRange(start + prefix.length, end + prefix.length); }, 0);
+          }, [cases, activeCaseId, updateCase]);
+
+          const handleTextBlur = useCallback((id, fieldName, currentValue) => {
+            if (focusedText !== currentValue) {
+              let addedText = currentValue;
+              if (currentValue.startsWith(focusedText)) addedText = currentValue.substring(focusedText.length).trim();
+              else if (focusedText.startsWith(currentValue)) { addHistoryLog(id, `Updated ${fieldName} (Text removed)`); return; }
+              if (addedText) addHistoryLog(id, `${fieldName}: ${addedText.length > 100 ? addedText.substring(0, 100) + '...' : addedText}`);
+              else addHistoryLog(id, `Updated ${fieldName}`);
+            }
+          }, [focusedText, addHistoryLog]);
+
+          const renderDashboard = () => (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Queue Overview</h1>
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <input type="text" placeholder="Search cases..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-10 pr-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 dark:text-white" />
+                  </div>
+                  <select value={statusFilter || ''} onChange={e => setStatusFilter(e.target.value || null)} className="px-4 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 dark:text-white">
+                    <option value="">All Statuses</option>
+                    {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <div className="flex rounded-lg border border-gray-200 dark:border-slate-700 overflow-hidden">
+                    <button onClick={() => setDashboardMode('table')} className={`px-3 py-2 ${dashboardMode === 'table' ? 'bg-blue-500 text-white' : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300'}`}><ListIcon className="h-4 w-4" /></button>
+                    <button onClick={() => setDashboardMode('kanban')} className={`px-3 py-2 ${dashboardMode === 'kanban' ? 'bg-blue-500 text-white' : 'bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300'}`}><LayoutGrid className="h-4 w-4" /></button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                {Object.entries(kpiData).map(([status, count]) => (
+                  <div key={status} onClick={() => setStatusFilter(statusFilter === status ? null : status)} className={`p-4 rounded-xl border cursor-pointer transition-all ${statusFilter === status ? 'ring-2 ring-blue-500' : ''} ${STATUS_COLORS[status].tailwind} dark:border-slate-700`}>
+                    <div className="text-2xl font-bold">{count}</div>
+                    <div className="text-xs font-medium opacity-80">{status}</div>
+                  </div>
+                ))}
+              </div>
+
+              {dashboardMode === 'table' && (
+                <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 overflow-hidden">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 dark:bg-slate-900/50">
+                      <tr>
+                        {['caseNumber', 'contactName', 'category', 'status', 'creationDate'].map(key => (
+                          <th key={key} onClick={() => requestSort(key)} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-700">
+                            <div className="flex items-center gap-1">{key === 'creationDate' ? 'Created' : key.charAt(0).toUpperCase() + key.slice(1)} {sortConfig.key === key && (sortConfig.direction === 'asc' ? '↑' : '↓')}</div>
+                          </th>
+                        ))}
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-slate-700">
+                      {paginatedCases.map(c => (
+                        <tr key={c.id} onClick={() => { setActiveCaseId(c.id); setCurrentView('case-detail'); }} className="hover:bg-gray-50 dark:hover:bg-slate-700/50 cursor-pointer">
+                          <td className="px-4 py-3 text-sm font-medium text-blue-600 dark:text-blue-400">{c.caseNumber}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900 dark:text-white">{c.contactName}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{c.category}</td>
+                          <td className="px-4 py-3"><span className={`px-2 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[c.status]?.tailwind || 'bg-gray-100 text-gray-800'}`}>{c.status}</span></td>
+                          <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{c.creationDate ? new Date(c.creationDate).toLocaleDateString() : '-'}</td>
+                          <td className="px-4 py-3"><button onClick={e => { e.stopPropagation(); setActiveCaseId(c.id); setCurrentView('case-detail'); }} className="text-blue-600 hover:text-blue-800 text-sm font-medium">View</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {totalPages > 1 && (
+                    <div className="px-4 py-3 bg-gray-50 dark:bg-slate-900/50 flex justify-between items-center">
+                      <span className="text-sm text-gray-500">Page {currentPage} of {totalPages}</span>
+                      <div className="flex gap-2">
+                        <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1 bg-white dark:bg-slate-800 border rounded text-sm disabled:opacity-50">Prev</button>
+                        <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="px-3 py-1 bg-white dark:bg-slate-800 border rounded text-sm disabled:opacity-50">Next</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {dashboardMode === 'kanban' && (
+                <div className="grid grid-cols-1 md:grid-cols-3 lg:md:grid-cols-4 gap-4">
+                  {STATUSES.filter(s => s !== 'Closed').map(status => (
+                    <div key={status} className="bg-gray-100 dark:bg-slate-800/50 rounded-xl p-4 min-h-[200px]">
+                      <h3 className={`font-bold text-sm mb-3 pb-2 border-b ${STATUS_COLORS[status]?.tailwind?.split(' ')[1] || ''}`}>{status} ({cases.filter(c => c.status === status).length})</h3>
+                      <div className="space-y-2">
+                        {cases.filter(c => c.status === status).map(c => (
+                          <div key={c.id} onClick={() => { setActiveCaseId(c.id); setCurrentView('case-detail'); }} className="bg-white dark:bg-slate-800 p-3 rounded-lg border border-gray-200 dark:border-slate-700 cursor-pointer hover:shadow-md transition-shadow">
+                            <div className="font-medium text-sm text-gray-900 dark:text-white">{c.caseNumber}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.contactName}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+
+          const renderCaseDetail = () => {
+            if (!activeCase) return <div className="text-center py-12 text-gray-500">Case not found</div>;
+            return (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <button onClick={() => { setCurrentView('dashboard'); setActiveCaseId(null); }} className="flex items-center gap-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">
+                    <ArrowLeft className="h-4 w-4" /> Back to Queue
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => document.getElementById('history-modal').showModal()} className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-slate-800 rounded-lg text-sm hover:bg-gray-200 dark:hover:bg-slate-700"><HistoryIcon className="h-4 w-4" /> History</button>
+                    <button onClick={handlePrintCase} className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-slate-800 rounded-lg text-sm hover:bg-gray-200 dark:hover:bg-slate-700"><Printer className="h-4 w-4" /> Print</button>
+                    <button onClick={() => document.getElementById('delete-modal').showModal()} className="flex items-center gap-2 px-3 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg text-sm hover:bg-red-100 dark:hover:bg-red-900/40"><Trash2 className="h-4 w-4" /> Delete</button>
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-700 p-6">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                    <div>
+                      <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{activeCase.caseNumber}</h1>
+                      <div className="flex items-center gap-3 mt-1">
+                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${STATUS_COLORS[activeCase.status]?.tailwind || 'bg-gray-100 text-gray-800'}`}>{activeCase.status}</span>
+                        <span className="text-sm text-gray-500 dark:text-gray-400">Created {new Date(activeCase.creationDate || Date.now()).toLocaleDateString()} ({calculateAge(activeCase.creationDate)} days ago)</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+                    <InputField label="Contact Name" value={activeCase.contactName} onChange={e => updateCase(activeCase.id, 'contactName', e.target.value)} />
+                    <InputField label="Account Number" value={activeCase.accountNumber} onChange={e => updateCase(activeCase.id, 'accountNumber', e.target.value)} />
+                    <InputField label="Contact Number" value={activeCase.contactNumber} onChange={e => updateCase(activeCase.id, 'contactNumber', e.target.value)} />
+                    <InputField label="Email" type="email" value={activeCase.email} onChange={e => updateCase(activeCase.id, 'email', e.target.value)} />
+                    <InputField label="Site Address" value={activeCase.siteAddress} onChange={e => updateCase(activeCase.id, 'siteAddress', e.target.value)} />
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-slate-400 mb-1">Status</label>
+                      <select value={activeCase.status} onChange={e => updateCase(activeCase.id, 'status', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white outline-none">
+                        {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-slate-400 mb-1">Category</label>
+                      <select value={activeCase.category} onChange={e => updateCase(activeCase.id, 'category', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white outline-none">
+                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 dark:text-slate-400 mb-1">Hold Until Date</label>
+                      <input type="date" value={activeCase.holdUntilDate} onChange={e => updateCase(activeCase.id, 'holdUntilDate', e.target.value)} className="w-full px-3 py-2 bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 dark:text-white outline-none" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <ActionBlock title="Notes" icon={FileText} color="blue" value={activeCase.notes} field="notes" placeholder="Enter case notes..." activeCaseId={activeCase.id} updateCase={updateCase} addHistoryLog={addHistoryLog} quickActions={quickActions} focusedText={focusedText} setFocusedText={setFocusedText} handleTextBlur={handleTextBlur} />
+                    <ActionBlock title="Latest Action" icon={ActivityIcon} color="amber" value={activeCase.latestAction} field="latestAction" placeholder="Document recent actions..." activeCaseId={activeCase.id} updateCase={updateCase} addHistoryLog={addHistoryLog} quickActions={quickActions} focusedText={focusedText} setFocusedText={setFocusedText} handleTextBlur={handleTextBlur} />
+                  </div>
+                </div>
+              </div>
+            );
+          };
+
+          // --- Exporters ---
+          const handlePrintCase = useCallback(() => {
+            const activeCase = cases.find(c => c.id === activeCaseId) || null; if (!activeCase) return;
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html><head><title>Case Summary - ${activeCase.caseNumber}</title><style>body { font-family: sans-serif; color: #1e293b; padding: 40px; max-width: 800px; margin: 0 auto; } h1 { border-bottom: 2px solid #e2e8f0; } .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; } .field { margin-bottom: 12px; } .field label { font-size: 11px; font-weight: bold; color: #94a3b8; } .field div { background: #f8fafc; padding: 10px; border-radius: 6px; border: 1px solid #e2e8f0;} .history-item { border-left: 3px solid #3b82f6; padding-left: 12px; margin-bottom: 10px; }</style></head><body>
+                <h1>Case Summary: ${activeCase.caseNumber}</h1><div><strong>Status:</strong> ${activeCase.status} | <strong>Created:</strong> ${new Date(activeCase.creationDate || Date.now()).toLocaleString()}</div>
+                <div class="grid"><div><h2>Customer</h2><div class="field"><label>Name</label><div>${activeCase.contactName || '-'}</div></div><div class="field"><label>Account</label><div>${activeCase.accountNumber || '-'}</div></div></div><div><h2>Case</h2><div class="field"><label>Notes</label><div>${activeCase.notes || '-'}</div></div><div class="field"><label>Latest</label><div>${activeCase.latestAction || '-'}</div></div></div></div>
+                <h2>Audit Log</h2>${(activeCase.history || []).map(h => `<div class="history-item"><div><strong>${h.user || 'System'}</strong> &bull; ${new Date(h.timestamp).toLocaleString()}</div><div>${h.action}</div></div>`).join('')}
+                <script>window.onload = function() { window.print(); }<${"/script>"}</body></html>
+            `); printWindow.document.close();
+          }, [cases, activeCaseId]);
+
+          const exportCSV = useCallback(() => {
+            const headers = ["Case Number", "Contact Name", "Category", "Status", "Age (Days)", "Account Number", "Email", "Creation Date"];
+            const rows = cases.map(c => [c.caseNumber, `"${c.contactName || ''}"`, c.category || 'Uncategorized', c.status, calculateAge(c.creationDate), c.accountNumber, c.email, new Date(c.creationDate || Date.now()).toLocaleDateString()].join(","));
+            const csvText = [headers.join(","), ...rows].join("\n");
+            const blob = new Blob([csvText], { type: 'text/csv' }); const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = `Export_${new Date().toISOString().split('T')[0]}.csv`; a.click(); URL.revokeObjectURL(url);
+          }, [cases]);
+
+// --- Unified Heartbeat ---
+          const isMountedRef = useRef(true);
+          useEffect(() => {
+            isMountedRef.current = true;
+            return () => { isMountedRef.current = false; };
+          }, []);
+          useEffect(() => {
+            const doBackup = () => {
+              if (!isMountedRef.current) return;
+              const now = new Date(); const todayStr = now.toISOString().split('T')[0];
+              const hours = now.getHours(); const minutes = now.getMinutes();
+              if ((hours === 12 || hours === 17) && minutes === 0) {
+                const backupKey = `backup_${hours}_${now.toDateString()}`;
+                if (localStorage.getItem('rh_last_backup') !== backupKey) {
+                  exportData(casesRef.current, `backup_${hours}00_${todayStr}.json`);
+                  localStorage.setItem('rh_last_backup', backupKey);
+                }
+              }
+            };
+            const doNotifications = () => {
+              if (!isMountedRef.current) return;
+              if ("Notification" in window && Notification.permission === "granted") {
+                const now = new Date(); const todayStr = now.toISOString().split('T')[0];
+                casesRef.current.forEach(c => {
+                  if (c.status === 'Hold - In Progress' && c.holdUntilDate && new Date(c.holdUntilDate).toDateString() === now.toDateString()) {
+                    const notifKey = `notified_${c.id}_${todayStr}`;
+                    if (!localStorage.getItem(notifKey)) {
+                      new Notification("Case Action Required", { body: `Case ${c.caseNumber} is due today.` });
+                      localStorage.setItem(notifKey, 'true');
+                    }
+                  }
+                });
+              }
+            };
+            const heartbeat = setInterval(() => { doBackup(); doNotifications(); }, 60000);
+            return () => { clearInterval(heartbeat); };
+          }, []);
+
+          // UI Auto-Save Notification
+          const saveTimerRef = useRef(null);
+          useEffect(() => {
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+            setSaveStatus('All changes saved');
+            saveTimerRef.current = setTimeout(() => { if (isMountedRef.current) setSaveStatus(''); }, 2000);
+            return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+          }, [cases]);
+
+return (
+            <div className={`h-full w-full flex overflow-hidden font-sans antialiased transition-colors duration-300 ${darkMode ? 'dark bg-[#0f172a]' : 'bg-gray-50'}`}>
+              <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 text-slate-300 shadow-xl z-10 no-print">
+                <div className="p-6 flex items-center gap-3 border-b border-slate-800/50"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20"><LayoutDashboard className="h-4 w-4 text-white" /></div><div><span className="text-lg font-bold text-white tracking-tight block leading-none">Resolution Hub</span><span className="text-[10px] text-slate-500 font-mono tracking-widest uppercase mt-1 block">Enterprise Edition</span></div></div>
+                <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+                  <button onClick={() => setCurrentView('dashboard')} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all ${currentView === 'dashboard' ? 'bg-blue-600/10 text-blue-400 font-medium' : 'hover:bg-slate-800 hover:text-white'}`}><FolderOpen className="h-5 w-5" /> Queue Overview</button>
+                  <div className="mt-8 mb-2 px-2 text-xs font-semibold text-slate-500 uppercase tracking-wider text-left">Data Management</div>
+                  <button onClick={() => exportData(casesRef.current, `backup_${new Date().toISOString().split('T')[0]}.json`)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-slate-800 hover:text-white transition-colors text-left"><SaveIcon className="h-5 w-5" /> Save Data to File</button>
+                  <label className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-slate-800 hover:text-white transition-colors cursor-pointer text-left"><Upload className="h-5 w-5" /> Load Data File <input type="file" accept=".json" className="hidden" onChange={handleImport} /></label>
+                  <button onClick={exportCSV} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-slate-800 hover:text-white transition-colors text-left"><FileSpreadsheet className="h-5 w-5" /> Export to CSV</button>
+                  <button onClick={cleanArchivedCases} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-slate-800 hover:text-white transition-colors text-left"><Trash2 className="h-5 w-5" /> Cleanup Old Cases</button>
+                </nav>
+                <div className="p-4 border-t border-slate-800 bg-slate-900/50"><div className="flex items-center justify-between mb-4 px-2"><div className="flex items-center gap-2"><div className="w-6 h-6 rounded bg-slate-700 flex items-center justify-center text-[10px] font-bold text-white uppercase">{advisorInitials}</div><span className="text-sm font-medium">{advisorName}</span></div><div className="flex items-center gap-1"><button onClick={() => document.getElementById('settings-modal').showModal()} className="p-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"><SettingsIcon className="h-4 w-4" /></button><button onClick={() => setDarkMode(!darkMode)} className="p-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-white transition-colors">{darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button></div></div><button id="btn-new-case" onClick={handleCreateCase} className="w-full py-2.5 border border-blue-500/30 text-blue-400 bg-blue-500/10 rounded-lg hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all text-sm font-semibold flex items-center justify-center gap-2" title="Ctrl + N"><Plus className="h-4 w-4" /> New Case</button></div>
+              </aside>
+              <main className="flex-1 flex flex-col h-full min-w-0 bg-transparent relative overflow-hidden">
+                <div className="flex-1 overflow-y-auto p-6 md:p-8">
+                  {currentView === 'dashboard' && renderDashboard()}
+                  {currentView === 'case-detail' && renderCaseDetail()}
+                </div>
+                {isTasksOpen && (
+                  <div className="absolute right-0 top-0 bottom-0 w-80 bg-white dark:bg-slate-900 border-l dark:border-slate-700 shadow-2xl z-[60] flex flex-col animate-in slide-in-from-right duration-200"><div className="p-4 border-b dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-800/50"><h3 className="font-bold text-gray-900 dark:text-white flex items-center gap-2"><CheckSquare className="h-5 w-5 text-blue-500"/> Tasks</h3><button onClick={() => setIsTasksOpen(false)}>✕</button></div><div className="flex-1 overflow-y-auto p-4 space-y-3">{personalTasks.map(t => (<div key={t.id} className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-slate-800 rounded-lg border dark:border-slate-700 group"><input type="checkbox" checked={t.completed} onChange={() => setPersonalTasks(tasks => tasks.map(x => x.id === t.id ? {...x, completed: !x.completed} : x))} /><span className={`text-sm flex-1 ${t.completed ? 'line-through text-gray-400' : 'text-gray-700 dark:text-gray-200'}`}>{t.text}</span><button onClick={() => setPersonalTasks(tasks => tasks.filter(x => x.id !== t.id))} className="text-gray-400 opacity-0 group-hover:opacity-100"><Trash2 className="h-4 w-4"/></button></div>))}{personalTasks.length === 0 && <div className="text-center text-sm text-gray-400 py-8">Empty.</div>}</div><div className="p-4 border-t dark:border-slate-700"><input type="text" placeholder="Add task..." onKeyDown={e => {if (e.key === 'Enter' && e.target.value.trim()) { setPersonalTasks([...personalTasks, { id: Date.now(), text: e.target.value.trim(), completed: false }]); e.target.value = ''; }}} className="w-full px-3 py-2 bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-600 rounded-lg text-sm outline-none" /></div></div>
+                )}
+              </main>
+
+              <dialog id="settings-modal" className="w-[calc(100%-2rem)] max-w-md bg-transparent p-0 border-0 rounded-2xl m-auto shadow-2xl"><div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 w-full flex flex-col overflow-hidden"><div className="p-6 border-b border-gray-100 dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-900"><h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2"><SettingsIcon className="h-5 w-5"/> User Settings</h3><button onClick={() => document.getElementById('settings-modal').close()} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">✕</button></div><div className="p-6 overflow-y-auto max-h-[60vh] space-y-6"><div className="space-y-4"><h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Advisor Profile</h4><div className="grid grid-cols-3 gap-4"><div className="col-span-2"><InputField label="Display Name" value={advisorName} onChange={e => setAdvisorName(e.target.value)} /></div><div><InputField label="Initials" value={advisorInitials} onChange={e => setAdvisorInitials(e.target.value)} /></div></div><div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-slate-700 mt-4"><div><div className="text-sm font-medium text-gray-900 dark:text-white">Notifications</div><div className="text-xs text-gray-500">Alerts when On-Hold cases are due</div></div><button onClick={() => Notification.requestPermission().then(p => alert(p==="granted"?"Enabled":"Denied"))} className="px-3 py-1.5 bg-white dark:bg-slate-800 border dark:border-slate-600 shadow-sm text-xs font-bold rounded-lg transition-colors">Enable Alerts</button></div></div><div className="space-y-4"><h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Quick Actions</h4><div className="space-y-2">{quickActions.map((action, idx) => (<div key={idx} className="flex items-center gap-2"><div className="flex-1 px-3 py-2 bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg text-xs truncate">{action}</div><button onClick={() => setQuickActions(quickActions.filter((_, i) => i !== idx))} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg"><Trash2 className="h-4 w-4"/></button></div>))}</div><div className="flex gap-2"><input type="text" value={newActionText} onChange={e => setNewActionText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && newActionText.trim()) { setQuickActions([...quickActions, newActionText.trim()]); setNewActionText(''); } }} placeholder="Add phrase..." className="flex-1 px-3 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg text-sm outline-none" /><button onClick={() => { if (newActionText.trim()) { setQuickActions([...quickActions, newActionText.trim()]); setNewActionText(''); } }} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium">Add</button></div></div></div></div></dialog>
+              <dialog id="delete-modal" className="w-[calc(100%-2rem)] max-w-sm bg-transparent p-0 border-0 rounded-2xl m-auto shadow-2xl"><div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 w-full p-6 space-y-6"><div className="text-center"><div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mx-auto mb-4"><Trash2 className="h-8 w-8" /></div><h3 className="text-lg font-bold text-gray-900 dark:text-white">Delete Case?</h3><p className="text-sm text-gray-500 mt-1">This action is permanent and cannot be undone.</p></div><div className="flex gap-3"><button onClick={() => document.getElementById('delete-modal').close()} className="flex-1 px-4 py-2 bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-200 font-bold rounded-xl">Cancel</button><button onClick={confirmDeleteCase} className="flex-1 px-4 py-2 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700">Delete</button></div></div></dialog>
+              {activeCase && (
+                <dialog id="history-modal" className="w-[calc(100%-2rem)] max-w-2xl bg-transparent p-0 border-0 rounded-2xl m-auto shadow-2xl"><div className="bg-white dark:bg-slate-800 rounded-2xl border dark:border-slate-700 w-full max-h-[80vh] flex flex-col overflow-hidden"><div className="p-6 border-b dark:border-slate-700 flex justify-between items-center bg-gray-50 dark:bg-slate-900"><h3 className="text-lg font-bold text-gray-900 dark:text-white">Audit Log: {activeCase.caseNumber}</h3><button onClick={() => document.getElementById('history-modal').close()}>✕</button></div><div className="p-6 overflow-y-auto flex-1"><div className="space-y-6 relative border-l-2 ml-5">{(activeCase.history || []).map((event, i) => (<div key={event.id} className="pl-6 relative pb-6"><div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-blue-500 border-2 border-white dark:border-slate-800"></div><div className="text-xs font-bold text-gray-900 dark:text-white mb-1">{event.user || 'System'} &bull; {new Date(event.timestamp).toLocaleString()}</div><div className="text-sm text-gray-600 dark:text-gray-300">{event.action}</div></div>))}</div></div></div></dialog>
+              )}
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root')); root.render(<App />);
+    </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "github.com/microsoft/playwright-mcp": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    },
+    "github.com/modelcontextprotocol/servers/tree/main/src/memory": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-memory"]
+    },
+    "github.com/modelcontextprotocol/servers/tree/main/src/filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${workspaceFolder}"]
+    }
+  }
+}

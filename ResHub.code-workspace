@@ -5,6 +5,6 @@
         }
     ],
     "settings": {
-        "todo-tree.tree.scanMode": "open files"
+        "todo-tree.tree.scanMode": "workspace"
     }
 }

@@ -22,7 +22,7 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
-        dialog::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); }
+        dialog::backdrop { background: rgba(0, 0, 0, 0.6); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
@@ -554,10 +554,10 @@
                 const now = new Date(); const todayStr = now.toISOString().split('T')[0];
                 casesRef.current.forEach(c => {
                   if (c.status === 'Hold - In Progress' && c.holdUntilDate && new Date(c.holdUntilDate).toDateString() === now.toDateString()) {
-                    const notifKey = `notified_${c.id}_${todayStr}`;
-                    if (!localStorage.getItem(notifKey)) {
+                    const notificationKey = `notified_${c.id}_${todayStr}`;
+                    if (!localStorage.getItem(notificationKey)) {
                       new Notification("Case Action Required", { body: `Case ${c.caseNumber} is due today.` });
-                      localStorage.setItem(notifKey, 'true');
+                      localStorage.setItem(notificationKey, 'true');
                     }
                   }
                 });

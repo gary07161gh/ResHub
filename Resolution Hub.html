@@ -511,14 +511,70 @@
           // --- Exporters ---
           const handlePrintCase = useCallback(() => {
             const activeCase = cases.find(c => c.id === activeCaseId) || null; if (!activeCase) return;
-            const printWindow = window.open('', '_blank');
-            printWindow.document.write(`
-                <html><head><title>Case Summary - ${activeCase.caseNumber}</title><style>body { font-family: sans-serif; color: #1e293b; padding: 40px; max-width: 800px; margin: 0 auto; } h1 { border-bottom: 2px solid #e2e8f0; } .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; } .field { margin-bottom: 12px; } .field label { font-size: 11px; font-weight: bold; color: #94a3b8; } .field div { background: #f8fafc; padding: 10px; border-radius: 6px; border: 1px solid #e2e8f0;} .history-item { border-left: 3px solid #3b82f6; padding-left: 12px; margin-bottom: 10px; }</style></head><body>
-                <h1>Case Summary: ${activeCase.caseNumber}</h1><div><strong>Status:</strong> ${activeCase.status} | <strong>Created:</strong> ${new Date(activeCase.creationDate || Date.now()).toLocaleString()}</div>
-                <div class="grid"><div><h2>Customer</h2><div class="field"><label>Name</label><div>${activeCase.contactName || '-'}</div></div><div class="field"><label>Account</label><div>${activeCase.accountNumber || '-'}</div></div></div><div><h2>Case</h2><div class="field"><label>Notes</label><div>${activeCase.notes || '-'}</div></div><div class="field"><label>Latest</label><div>${activeCase.latestAction || '-'}</div></div></div></div>
-                <h2>Audit Log</h2>${(activeCase.history || []).map(h => `<div class="history-item"><div><strong>${h.user || 'System'}</strong> &bull; ${new Date(h.timestamp).toLocaleString()}</div><div>${h.action}</div></div>`).join('')}
-                <script>window.onload = function() { window.print(); }<${"/script>"}</body></html>
-            `); printWindow.document.close();
+            const printFrame = document.createElement('iframe');
+            printFrame.title = `Print preview for ${activeCase.caseNumber}`;
+            printFrame.setAttribute('aria-hidden', 'true');
+            printFrame.style.position = 'fixed';
+            printFrame.style.right = '0';
+            printFrame.style.bottom = '0';
+            printFrame.style.width = '0';
+            printFrame.style.height = '0';
+            printFrame.style.border = '0';
+            printFrame.style.opacity = '0';
+            printFrame.style.pointerEvents = 'none';
+
+            const cleanup = () => {
+              if (printFrame.parentNode) printFrame.parentNode.removeChild(printFrame);
+            };
+
+            printFrame.onload = () => {
+              const printWindow = printFrame.contentWindow;
+              if (!printWindow) {
+                cleanup();
+                return;
+              }
+              printWindow.onafterprint = cleanup;
+              printWindow.focus();
+              printWindow.print();
+              window.setTimeout(cleanup, 5000);
+            };
+
+            printFrame.srcdoc = `
+              <html>
+                <head>
+                  <title>Case Summary - ${activeCase.caseNumber}</title>
+                  <style>
+                    body { font-family: sans-serif; color: #1e293b; padding: 40px; max-width: 800px; margin: 0 auto; }
+                    h1 { border-bottom: 2px solid #e2e8f0; }
+                    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+                    .field { margin-bottom: 12px; }
+                    .field label { font-size: 11px; font-weight: bold; color: #94a3b8; }
+                    .field div { background: #f8fafc; padding: 10px; border-radius: 6px; border: 1px solid #e2e8f0; }
+                    .history-item { border-left: 3px solid #3b82f6; padding-left: 12px; margin-bottom: 10px; }
+                  </style>
+                </head>
+                <body>
+                  <h1>Case Summary: ${activeCase.caseNumber}</h1>
+                  <div><strong>Status:</strong> ${activeCase.status} | <strong>Created:</strong> ${new Date(activeCase.creationDate || Date.now()).toLocaleString()}</div>
+                  <div class="grid">
+                    <div>
+                      <h2>Customer</h2>
+                      <div class="field"><label>Name</label><div>${activeCase.contactName || '-'}</div></div>
+                      <div class="field"><label>Account</label><div>${activeCase.accountNumber || '-'}</div></div>
+                    </div>
+                    <div>
+                      <h2>Case</h2>
+                      <div class="field"><label>Notes</label><div>${activeCase.notes || '-'}</div></div>
+                      <div class="field"><label>Latest</label><div>${activeCase.latestAction || '-'}</div></div>
+                    </div>
+                  </div>
+                  <h2>Audit Log</h2>
+                  ${(activeCase.history || []).map(h => `<div class="history-item"><div><strong>${h.user || 'System'}</strong> &bull; ${new Date(h.timestamp).toLocaleString()}</div><div>${h.action}</div></div>`).join('')}
+                </body>
+              </html>
+            `;
+
+            document.body.appendChild(printFrame);
           }, [cases, activeCaseId]);
 
           const exportCSV = useCallback(() => {
